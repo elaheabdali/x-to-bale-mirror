@@ -91,6 +91,7 @@ def _safe_user_init(self: Any, client: Any, data: dict[str, Any]) -> None:
 
 _twikit_user.User.__init__ = _safe_user_init  # type: ignore[method-assign]
 
+
 class XAuthError(Exception):
     """Raised when X cookies are invalid or expired (401/403)."""
 
@@ -104,7 +105,7 @@ class MediaTooLargeError(Exception):
 
 
 class XTimelineClient:
-    """Cookie-authenticated X client fetching the chronological Following feed."""
+    """Cookie-authenticated X client fetching Following and For You feeds."""
 
     def __init__(
         self,
@@ -164,23 +165,37 @@ class XTimelineClient:
         await self._http.aclose()
 
     async def fetch_home_timeline(self, count: int = 20) -> list[NormalizedTweet]:
-        """Fetch Home Timeline ('Following' feed) in chronological order (oldest first)."""
-        try:
-            raw_tweets = await self.client.get_latest_timeline(count=count)
-        except (Unauthorized, Forbidden) as exc:
-            raise XAuthError(f"X authentication failed (cookies may be expired): {exc}") from exc
-        except TooManyRequests as exc:
-            raise XRateLimitError(f"X rate limit reached: {exc}") from exc
-        except Exception as exc:
-            msg = str(exc).lower()
-            if "401" in msg or "403" in msg or "unauthorized" in msg:
-                raise XAuthError(f"X authentication failed: {exc}") from exc
-            if "429" in msg or "rate limit" in msg:
+        """Fetch both Following and For You feeds in chronological order (oldest first)."""
+        raw_tweets: list[Any] = []
+        seen_ids: set[str] = set()
+
+        for feed_name, fetcher in (
+            ("Following", self.client.get_latest_timeline),
+            ("ForYou", self.client.get_timeline),
+        ):
+            try:
+                batch = await fetcher(count=count)
+                for item in batch:
+                    tid = str(getattr(item, "id", ""))
+                    if tid and tid not in seen_ids:
+                        seen_ids.add(tid)
+                        raw_tweets.append(item)
+            except (Unauthorized, Forbidden) as exc:
+                raise XAuthError(f"X authentication failed (cookies may be expired): {exc}") from exc
+            except TooManyRequests as exc:
                 raise XRateLimitError(f"X rate limit reached: {exc}") from exc
-            if "key_byte" in msg or "clienttransaction" in msg or "'key'" in msg:
-                logger.warning("Resetting X client after ClientTransaction error: %s", exc)
-                self.client = self._build_client()
-            raise
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "401" in msg or "403" in msg or "unauthorized" in msg:
+                    raise XAuthError(f"X authentication failed: {exc}") from exc
+                if "429" in msg or "rate limit" in msg:
+                    raise XRateLimitError(f"X rate limit reached: {exc}") from exc
+                if "key_byte" in msg or "clienttransaction" in msg or "'key'" in msg:
+                    logger.warning("Resetting X client after ClientTransaction error: %s", exc)
+                    self.client = self._build_client()
+                logger.warning("Failed to fetch %s timeline: %s", feed_name, exc)
+                if not raw_tweets and feed_name == "ForYou":
+                    raise
 
         normalized: list[NormalizedTweet] = []
         for raw in raw_tweets:
