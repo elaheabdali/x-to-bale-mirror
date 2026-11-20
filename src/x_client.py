@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import twikit.user as _twikit_user
 from twikit import Client
 from twikit.errors import Forbidden, TooManyRequests, Unauthorized
 
@@ -17,6 +18,26 @@ from src.formatter import NormalizedMedia, NormalizedQuotedTweet, NormalizedTwee
 logger = logging.getLogger(__name__)
 
 _TRAILING_TCO_RE = re.compile(r"\s*https://t\.co/\w+\s*$")
+
+# Patch twikit.user.User.__init__ to tolerate fields X omits in 2026 payloads
+_orig_user_init = _twikit_user.User.__init__
+
+
+def _safe_user_init(self: Any, client: Any, data: dict[str, Any]) -> None:
+    if isinstance(data, dict):
+        legacy = data.setdefault("legacy", {})
+        if isinstance(legacy, dict):
+            entities = legacy.setdefault("entities", {})
+            if isinstance(entities, dict):
+                desc = entities.setdefault("description", {})
+                if isinstance(desc, dict):
+                    desc.setdefault("urls", [])
+            legacy.setdefault("withheld_in_countries", [])
+            legacy.setdefault("fast_followers_count", 0)
+    _orig_user_init(self, client, data)
+
+
+_twikit_user.User.__init__ = _safe_user_init  # type: ignore[method-assign]
 
 
 class XAuthError(Exception):
