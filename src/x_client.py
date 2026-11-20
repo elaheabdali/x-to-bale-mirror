@@ -64,6 +64,28 @@ class XTimelineClient:
         except TypeError:
             client = Client(self.language)
         client.set_cookies({"auth_token": self.auth_token, "ct0": self.ct0})
+
+        # Guard against X returning an anonymous stub page without ondemand.s
+        ct = getattr(client, "client_transaction", None)
+        if ct is not None:
+            orig_init = ct.init
+            orig_gen = ct.generate_transaction_id
+
+            async def _safe_init(session: Any, headers: Any) -> None:
+                try:
+                    await orig_init(session, headers)
+                except Exception as exc:
+                    logger.warning("ClientTransaction.init skipped (%s)", exc)
+
+            def _safe_gen(method: str, path: str, *args: Any, **kwargs: Any) -> str:
+                try:
+                    return orig_gen(method=method, path=path, *args, **kwargs)
+                except Exception:
+                    return ""
+
+            ct.init = _safe_init  # type: ignore[method-assign]
+            ct.generate_transaction_id = _safe_gen  # type: ignore[method-assign]
+
         return client
 
     async def close(self) -> None:
