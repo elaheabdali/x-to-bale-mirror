@@ -50,7 +50,11 @@ class XTimelineClient:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.max_video_bytes = max_video_size_mb * 1024 * 1024
 
-        self.client = Client(language)
+        try:
+            self.client = Client(language, impersonate="chrome124")
+        except TypeError:
+            self.client = Client(language)
+
         self.client.set_cookies({"auth_token": self.auth_token, "ct0": self.ct0})
         self._http = httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=15.0),
