@@ -49,18 +49,22 @@ class XTimelineClient:
         self.temp_dir = Path(temp_dir)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.max_video_bytes = max_video_size_mb * 1024 * 1024
+        self.language = language
 
-        try:
-            self.client = Client(language, impersonate="chrome124")
-        except TypeError:
-            self.client = Client(language)
-
-        self.client.set_cookies({"auth_token": self.auth_token, "ct0": self.ct0})
+        self.client = self._build_client()
         self._http = httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=15.0),
             follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0"},
         )
+
+    def _build_client(self) -> Client:
+        try:
+            client = Client(self.language, impersonate="chrome124")
+        except TypeError:
+            client = Client(self.language)
+        client.set_cookies({"auth_token": self.auth_token, "ct0": self.ct0})
+        return client
 
     async def close(self) -> None:
         await self._http.aclose()
@@ -79,6 +83,9 @@ class XTimelineClient:
                 raise XAuthError(f"X authentication failed: {exc}") from exc
             if "429" in msg or "rate limit" in msg:
                 raise XRateLimitError(f"X rate limit reached: {exc}") from exc
+            if "key_byte" in msg or "clienttransaction" in msg or "'key'" in msg:
+                logger.warning("Resetting X client after ClientTransaction error: %s", exc)
+                self.client = self._build_client()
             raise
 
         normalized: list[NormalizedTweet] = []
