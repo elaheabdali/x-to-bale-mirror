@@ -22,23 +22,74 @@ _TRAILING_TCO_RE = re.compile(r"\s*https://t\.co/\w+\s*$")
 # Patch twikit.user.User.__init__ to tolerate fields X omits in 2026 payloads
 _orig_user_init = _twikit_user.User.__init__
 
+_USER_LEGACY_DEFAULTS: dict[str, Any] = {
+    "created_at": "",
+    "name": "",
+    "screen_name": "",
+    "profile_image_url_https": "",
+    "profile_banner_url": "",
+    "description": "",
+    "location": "",
+    "url": "",
+    "pinned_tweet_ids_str": [],
+    "withheld_in_countries": [],
+    "can_dm": False,
+    "can_media_tag": False,
+    "default_profile": False,
+    "default_profile_image": False,
+    "fast_followers_count": 0,
+    "favourites_count": 0,
+    "followers_count": 0,
+    "friends_count": 0,
+    "has_custom_timelines": False,
+    "is_translator": False,
+    "listed_count": 0,
+    "media_count": 0,
+    "normal_followers_count": 0,
+    "possibly_sensitive": False,
+    "profile_interstitial_type": "",
+    "statuses_count": 0,
+    "translator_type": "none",
+    "verified": False,
+    "want_retweets": False,
+}
+
 
 def _safe_user_init(self: Any, client: Any, data: dict[str, Any]) -> None:
     if isinstance(data, dict):
         legacy = data.setdefault("legacy", {})
         if isinstance(legacy, dict):
+            for k, v in _USER_LEGACY_DEFAULTS.items():
+                legacy.setdefault(k, v)
             entities = legacy.setdefault("entities", {})
             if isinstance(entities, dict):
                 desc = entities.setdefault("description", {})
                 if isinstance(desc, dict):
                     desc.setdefault("urls", [])
-            legacy.setdefault("withheld_in_countries", [])
-            legacy.setdefault("fast_followers_count", 0)
-    _orig_user_init(self, client, data)
+                url_ent = entities.setdefault("url", {})
+                if isinstance(url_ent, dict):
+                    url_ent.setdefault("urls", [])
+
+    for _ in range(10):
+        try:
+            _orig_user_init(self, client, data)
+            return
+        except KeyError as exc:
+            missing = exc.args[0] if exc.args else None
+            if (
+                missing
+                and isinstance(data, dict)
+                and isinstance(data.get("legacy"), dict)
+                and missing not in data["legacy"]
+            ):
+                data["legacy"][missing] = (
+                    [] if any(w in str(missing) for w in ("ids", "urls", "countries")) else ""
+                )
+                continue
+            raise
 
 
 _twikit_user.User.__init__ = _safe_user_init  # type: ignore[method-assign]
-
 
 class XAuthError(Exception):
     """Raised when X cookies are invalid or expired (401/403)."""
